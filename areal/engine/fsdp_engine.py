@@ -17,6 +17,7 @@ from areal.api.cli_args import TrainEngineConfig
 from areal.api.engine_api import FinetuneSpec
 from areal.api.io_struct import ParamSpec, SaveLoadMeta, WeightUpdateMeta
 from areal.engine.base_hf_engine import BaseHFEngine
+from areal.utils.device import is_npu_available
 from areal.utils.distributed import init_custom_process_group
 from areal.utils.fsdp import (
     CPUOffloadPolicy,
@@ -275,7 +276,12 @@ class FSDPEngine(BaseHFEngine):
 
         # NOTE: grad norm clip function is different
 
-        grad_norm = fsdp2_clip_grad_norm_(
+        if is_npu_available:
+            grad_norm = torch.nn.utils.clip_grad_norm_(
+                self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
+            )
+        else:
+            grad_norm = fsdp2_clip_grad_norm_(
             self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
         )
 

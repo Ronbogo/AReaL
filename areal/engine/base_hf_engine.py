@@ -30,6 +30,7 @@ from areal.utils.data import (
     unpack_sequence,
     unsqueeze_mb_list,
 )
+from areal.utils.device import is_npu_available
 from areal.utils.fsdp import get_cosine_schedule_with_warmup
 from areal.utils.model import (
     VALID_VISION_MODELS,
@@ -86,18 +87,28 @@ class BaseHFEngine(TrainEngine):
         return self._parallelism_group
 
     def create_process_group(self):
-        # Required by NCCL weight update group for SGLang
-        os.environ["NCCL_CUMEM_ENABLE"] = "0"
-        os.environ["NCCL_NVLS_ENABLE"] = "0"
-        if not dist.is_initialized():
-            # TODO: Handle the condition when WORLD_SIZE and RANK is not set in launcher
-            # NOTE: device_id **SHOULD NOT** be passed into init_process_group,
-            # otherwise initializing the NCCL weight update group will be wrong!
-            dist.init_process_group(
-                backend="nccl",
-                timeout=constants.NCCL_DEFAULT_TIMEOUT,
-            )
-            self.own_global_group = True
+        if is_npu_available:
+            if not dist.is_initialized():
+                dist.init_process_group(
+                    backend="hccl",
+                    timeout=constants.NCCL_DEFAULT_TIMEOUT,
+                    world_size=int(os.environ["WORLD_SIZE"]),
+                    rank=int(os.environ["LOCAL_RANK"]),
+                )
+                self.own_global_group = True
+        else:
+            # Required by NCCL weight update group for SGLang
+            os.environ["NCCL_CUMEM_ENABLE"] = "0"
+            os.environ["NCCL_NVLS_ENABLE"] = "0"
+            if not dist.is_initialized():
+                # TODO: Handle the condition when WORLD_SIZE and RANK is not set in launcher
+                # NOTE: device_id **SHOULD NOT** be passed into init_process_group,
+                # otherwise initializing the NCCL weight update group will be wrong!
+                dist.init_process_group(
+                    backend="nccl",
+                    timeout=constants.NCCL_DEFAULT_TIMEOUT,
+                )
+                self.own_global_group = True
         self._parallelism_group = dist.new_group()
 
     def create_device_model(self):

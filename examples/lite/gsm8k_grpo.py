@@ -11,6 +11,7 @@ from areal.api.io_struct import AllocationMode, FinetuneSpec, StepInfo, WeightUp
 from areal.dataset import get_custom_dataset
 from areal.engine.ppo.actor import FSDPPPOActor
 from areal.engine.sglang_remote import RemoteSGLangEngine
+from areal.engine.vllm_remote import RemotevLLMEngine
 from areal.utils.device import log_gpu_stats
 from areal.utils.evaluator import Evaluator
 from areal.utils.recover import RecoverHandler
@@ -19,6 +20,10 @@ from areal.utils.stats_logger import StatsLogger
 from areal.workflow.rlvr import RLVRWorkflow
 from realhf.api.core.data_api import load_hf_tokenizer
 from realhf.base import seeding, stats_tracker
+from areal.utils.device import is_npu_available
+if is_npu_available:
+    import torch_npu
+    from torch_npu.contrib import transfer_to_npu
 
 
 def gsm8k_reward_fn(prompt, completions, prompt_ids, completion_ids, answer, **kwargs):
@@ -78,12 +83,17 @@ def main(args):
     )
 
     # Initialize inference engine
-    rollout = RemoteSGLangEngine(config.rollout)
+    # FIXME VLLM backend adapt
+    if is_npu_available:
+        rollout = RemotevLLMEngine(config.rollout)
+    else:
+        rollout = RemoteSGLangEngine(config.rollout)
     rollout.initialize(None, ft_spec)
-    eval_rollout = RemoteSGLangEngine(config.rollout)
-    eval_rollout.initialize(None, ft_spec)
-    # NOTE: set a large version such that eval does not have any offpolicyness control
-    eval_rollout.set_version(int(1e12))
+    # FIXME NPU adapt
+    # eval_rollout = RemoteSGLangEngine(config.rollout)
+    # eval_rollout.initialize(None, ft_spec)
+    # # NOTE: set a large version such that eval does not have any offpolicyness control
+    # eval_rollout.set_version(int(1e12))
 
     # Initialize train engine
     actor = FSDPPPOActor(config=config.actor)
@@ -206,34 +216,35 @@ def main(args):
         with stats_tracker.record_timing("save"):
             saver.save(actor, epoch, step, global_step, tokenizer=tokenizer)
 
-        with stats_tracker.record_timing("eval"):
-
-            def evaluate_fn():
-                rollout.pause()
-                cnt = 0
-                for data in valid_dataloader:
-                    for item in data:
-                        eval_rollout.submit(item, workflow)
-                        cnt += 1
-                batch = eval_rollout.wait(cnt, timeout=None)
-                rewards = batch["rewards"].float().to(actor.device)
-                with stats_tracker.scope("grpo-eval"):
-                    stats_tracker.denominator(
-                        n_seqs=torch.ones(
-                            rewards.shape[0],
-                            device=rewards.device,
-                            dtype=torch.bool,
-                        )
-                    )
-                    stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
-                rollout.resume()
-
-            evaluator.evaluate(
-                evaluate_fn,
-                epoch,
-                step,
-                global_step,
-            )
+        # FIXME NPU adapt
+        # with stats_tracker.record_timing("eval"):
+        #
+        #     def evaluate_fn():
+        #         rollout.pause()
+        #         cnt = 0
+        #         for data in valid_dataloader:
+        #             for item in data:
+        #                 eval_rollout.submit(item, workflow)
+        #                 cnt += 1
+        #         batch = eval_rollout.wait(cnt, timeout=None)
+        #         rewards = batch["rewards"].float().to(actor.device)
+        #         with stats_tracker.scope("grpo-eval"):
+        #             stats_tracker.denominator(
+        #                 n_seqs=torch.ones(
+        #                     rewards.shape[0],
+        #                     device=rewards.device,
+        #                     dtype=torch.bool,
+        #                 )
+        #             )
+        #             stats_tracker.stat(task_reward=rewards, denominator="n_seqs")
+        #         rollout.resume()
+        #
+        #     evaluator.evaluate(
+        #         evaluate_fn,
+        #         epoch,
+        #         step,
+        #         global_step,
+        #     )
 
         with stats_tracker.record_timing("checkpoint_for_recover"):
             recover_handler.dump(
@@ -249,7 +260,8 @@ def main(args):
         stats_logger.commit(epoch, step, global_step, stats)
 
     stats_logger.close()
-    eval_rollout.destroy()
+    # FIXME NPU adapt
+    # eval_rollout.destroy()
     rollout.destroy()
     if ref is not None:
         ref.destroy()
