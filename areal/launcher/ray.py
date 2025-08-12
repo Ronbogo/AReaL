@@ -16,6 +16,7 @@ from areal.api.cli_args import (
     LauncherConfig,
     RecoverConfig,
     SGLangConfig,
+    vLLMConfig,
     parse_cli_args,
     to_structured_cfg,
 )
@@ -24,6 +25,7 @@ from areal.utils.launcher import (
     get_env_vars,
     validate_config_for_distributed_launcher,
     wait_sglang_server_addrs,
+    wait_vllm_server_addrs,
 )
 from areal.utils.ray import get_placement_group_master_ip_and_port
 from areal.utils.recover import check_if_recover
@@ -318,6 +320,7 @@ def ray_main(config, run_id: int = 0):
     config.recover = to_structured_cfg(config.recover, RecoverConfig)
     config.cluster = to_structured_cfg(config.cluster, ClusterSpecConfig)
     config.sglang = to_structured_cfg(config.sglang, SGLangConfig)
+    config.vllm = to_structured_cfg(config.vllm, vLLMConfig)
     is_recover_run = check_if_recover(config.recover, run_id)
     validate_config_for_distributed_launcher(config)
 
@@ -348,6 +351,8 @@ def ray_main(config, run_id: int = 0):
     allocation_mode = AllocationMode.from_str(allocation_mode)
     sglang_addrs = []
     n_sglang_nodes = 0
+    vllm_addrs = []
+    n_vllm_nodes = 0
     if allocation_mode.gen_backend == "sglang":
         # Launcher should launch SGLang servers according to allocation mode.
         sglang_tp_size = allocation_mode.gen_tp_size
@@ -388,12 +393,53 @@ def ray_main(config, run_id: int = 0):
         except (TimeoutError, KeyboardInterrupt) as e:
             launcher.stop_all(force=True)
             raise e
+    elif allocation_mode.gen_backend == "vllm":
+        # Launcher should launch vLLM servers according to allocation mode.
+        vllm_tp_size = allocation_mode.gen_tp_size
+        n_vllm_servers = allocation_mode.gen_dp_size
+        n_vllm_nodes = allocation_mode.gen_world_size // n_gpus_per_node
+
+        base_seed = config.vllm.seed
+        vllm_args_list = [
+            [sys.argv[2:] + [f"vllm.seed={base_seed + i}"]]
+            for i in range(n_vllm_servers)
+        ]
+        vllm_entry_point = str(
+            pathlib.Path(__file__).resolve().parent.joinpath("vllm_server.py")
+        )
+        launcher.submit_array(
+            job_name="llm_server",
+            file_path=vllm_entry_point,
+            func_name=DEFAULT_MAIN_FUNC_NAME,
+            count=n_vllm_servers,
+            nodes=n_vllm_nodes,
+            list_args=vllm_args_list,
+            gpus_per_task=vllm_tp_size,
+            cpus_per_task=config.launcher.inference_server_cpus_per_gpu
+            * vllm_tp_size,
+            mem_per_task=config.launcher.inference_server_mem_per_gpu * vllm_tp_size,
+            env_vars=get_env_vars(
+                config.cluster.cluster_name,
+                config.launcher.inference_server_env_vars,
+            ),
+        )
+        # Get vllm server addresses via name_resolve
+        try:
+            vllm_addrs = wait_vllm_server_addrs(
+                config.experiment_name,
+                config.trial_name,
+                n_vllm_servers,
+            )
+        except (TimeoutError, KeyboardInterrupt) as e:
+            launcher.stop_all(force=True)
+            raise e
+
 
     if allocation_mode.type_ == AllocationType.DECOUPLED_EVAL:
         trainer_n_nodes = 1
         gpus_per_task = 0
     else:
-        trainer_n_nodes = n_nodes - n_sglang_nodes
+        trainer_n_nodes = n_nodes - (n_sglang_nodes if allocation_mode.gen_backend == "sglang" else n_vllm_nodes)
         gpus_per_task = 1
     trainer_entry_point = sys.argv[1]
     n_trainer_processes = trainer_n_nodes * config.cluster.n_gpus_per_node
@@ -402,6 +448,7 @@ def ray_main(config, run_id: int = 0):
         # In ray, we launch trainer in the granularity of processes (1 GPU per process)
         # We amend environment variable similar to torchrun to ensure correct initialization of
         # torch distributed.
+        addrs = sglang_addrs if allocation_mode.gen_backend == "sglang" else vllm_addrs
         launcher.submit_array(
             job_name="trainer",
             file_path=trainer_entry_point,
@@ -417,7 +464,7 @@ def ray_main(config, run_id: int = 0):
                     config.cluster.cluster_name,
                     config.launcher.trainer_env_vars,
                 ),
-                AREAL_LLM_SERVER_ADDRS=",".join(sglang_addrs),
+                AREAL_LLM_SERVER_ADDRS=",".join(addrs),
                 AREAL_RECOVER_RUN=str(int(is_recover_run)),
             ),
             amend_torch_dist_env=True,
