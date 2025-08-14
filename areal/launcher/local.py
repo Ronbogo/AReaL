@@ -19,6 +19,7 @@ from areal.api.cli_args import (
     parse_cli_args,
     to_structured_cfg,
 )
+from areal.utils.device import is_npu_available
 from areal.api.io_struct import AllocationMode, AllocationType
 from areal.utils.launcher import get_env_vars
 from areal.utils.network import find_free_ports, gethostip
@@ -82,14 +83,24 @@ class LocalLauncher:
         self._job_states = {}
 
         self._gpu_counter = 0
-        self._cuda_devices: List[str] = os.environ.get(
-            "CUDA_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count())))
-        ).split(",")
-        if len(self._cuda_devices) < 1:
-            raise RuntimeError(
-                f"Local mode can only run when there is at least one GPU. "
-                f"CUDA_VISIBLE_DEVICES is currently set to {os.environ['CUDA_VISIBLE_DEVICES']}."
-            )
+        if is_npu_available:
+            self._cuda_devices: List[str] = os.environ.get(
+                "CUDA_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.gpu_count())))
+            ).split(",")
+            if len(self._cuda_devices) < 1:
+                raise RuntimeError(
+                    f"Local mode can only run when there is at least one GPU. "
+                    f"CUDA_VISIBLE_DEVICES is currently set to {os.environ['CUDA_VISIBLE_DEVICES']}."
+                )
+        else:
+            self._cuda_devices: List[str] = os.environ.get(
+                "ASCEND_RT_VISIBLE_DEVICES", ",".join(map(str, range(gpu_utils.npu_count())))
+            ).split(",")
+            if len(self._cuda_devices) < 1:
+                raise RuntimeError(
+                    f"Local mode can only run when there is at least one NPU. "
+                    f"ASCEND_RT_VISIBLE_DEVICES is currently set to {os.environ['ASCEND_RT_VISIBLE_DEVICES']}."
+                )
 
     @property
     def run_name(self):

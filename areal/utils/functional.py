@@ -5,7 +5,6 @@ import torch
 import torch.distributed as dist
 
 
-@torch.compile
 def _gather_logprobs(
     logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0
 ):
@@ -14,7 +13,6 @@ def _gather_logprobs(
     return log_probs_labels
 
 
-@torch.compile
 def _gather_logprobs_entropy(
     logits: torch.Tensor, labels: torch.Tensor, temperature: float = 1.0
 ):

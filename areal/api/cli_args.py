@@ -520,7 +520,6 @@ class SGLangConfig:
 class InferenceEngineConfig:
     experiment_name: str = MISSING
     trial_name: str = MISSING
-    fileroot: str = MISSING
     max_concurrent_rollouts: None | int = field(
         default=None,
         metadata={

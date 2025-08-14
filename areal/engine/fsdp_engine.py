@@ -276,12 +276,7 @@ class FSDPEngine(BaseHFEngine):
 
         # NOTE: grad norm clip function is different
 
-        if is_npu_available:
-            grad_norm = torch.nn.utils.clip_grad_norm_(
-                self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
-            )
-        else:
-            grad_norm = fsdp2_clip_grad_norm_(
+        grad_norm = fsdp2_clip_grad_norm_(
             self.model.parameters(), max_norm=self.optimizer_config.gradient_clipping
         )
 

@@ -131,38 +131,36 @@ class BaseHFEngine(TrainEngine):
             )
 
             tik = time.perf_counter()
-            with torch.device("cuda"):
-                model = AutoModelForImageTextToText.from_pretrained(
+            model = AutoModelForImageTextToText.from_pretrained(
+                pretrained_model_name_or_path=self.config.path,
+                trust_remote_code=True,
+                torch_dtype=dtype,
+                attn_implementation=self.config.attn_impl,
+            )
+            if self.config.disable_dropout:
+                disable_dropout_in_model(model)
+        else:
+            self.tokenizer = load_hf_tokenizer(self.config.path)
+            tik = time.perf_counter()
+            if self.config.init_from_scratch:
+                # initialize scratch model from config
+                # NOTE: VLM cannot directly load state dict using this
+                # random initialized model, so otherwise we call
+                # from_pretrained rather than loading weights into this random model.
+                model = AutoModelForCausalLM.from_config(
+                    self.model_config,
+                    torch_dtype=dtype,
+                    attn_implementation=self.config.attn_impl,
+                )
+            else:
+                model = AutoModelForCausalLM.from_pretrained(
                     pretrained_model_name_or_path=self.config.path,
                     trust_remote_code=True,
                     torch_dtype=dtype,
                     attn_implementation=self.config.attn_impl,
                 )
-                if self.config.disable_dropout:
-                    disable_dropout_in_model(model)
-        else:
-            self.tokenizer = load_hf_tokenizer(self.config.path)
-            tik = time.perf_counter()
-            with torch.device("cuda"):
-                if self.config.init_from_scratch:
-                    # initialize scratch model from config
-                    # NOTE: VLM cannot directly load state dict using this
-                    # random initialized model, so otherwise we call
-                    # from_pretrained rather than loading weights into this random model.
-                    model = AutoModelForCausalLM.from_config(
-                        self.model_config,
-                        torch_dtype=dtype,
-                        attn_implementation=self.config.attn_impl,
-                    )
-                else:
-                    model = AutoModelForCausalLM.from_pretrained(
-                        pretrained_model_name_or_path=self.config.path,
-                        trust_remote_code=True,
-                        torch_dtype=dtype,
-                        attn_implementation=self.config.attn_impl,
-                    )
-                if self.config.disable_dropout:
-                    disable_dropout_in_model(model)
+            if self.config.disable_dropout:
+                disable_dropout_in_model(model)
 
         if self.config.gradient_checkpointing:
             model.gradient_checkpointing_enable(

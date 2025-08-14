@@ -27,6 +27,7 @@ from areal.utils.launcher import (
     wait_sglang_server_addrs,
     wait_vllm_server_addrs,
 )
+from areal.utils.device import is_npu_available
 from areal.utils.ray import get_placement_group_master_ip_and_port
 from areal.utils.recover import check_if_recover
 from realhf.base import logging, name_resolve, names
@@ -106,14 +107,24 @@ class RayLauncher:
             if placement_group is not None
             else "DEFAULT"
         )
-        future = ray.remote(
-            num_cpus=cpus,
-            num_gpus=gpus,
-            memory=mem * 1024 * 1024,  # Convert MB to bytes
-            runtime_env=runtime_env,
-            scheduling_strategy=scheduling_strategy,
-        )(run_func).remote(file_path, func_name, *args, **kwargs)
-        self.jobs[job_name] = future
+        if not is_npu_available:
+            future = ray.remote(
+                num_cpus=cpus,
+                num_gpus=gpus,
+                memory=mem * 1024 * 1024,  # Convert MB to bytes
+                runtime_env=runtime_env,
+                scheduling_strategy=scheduling_strategy,
+            )(run_func).remote(file_path, func_name, *args, **kwargs)
+            self.jobs[job_name] = future
+        else:
+            future = ray.remote(
+                num_cpus=cpus,
+                resources={"NPU": gpus},
+                memory=mem * 1024 * 1024,  # Convert MB to bytes
+                runtime_env=runtime_env,
+                scheduling_strategy=scheduling_strategy,
+            )(run_func).remote(file_path, func_name, *args, **kwargs)
+            self.jobs[job_name] = future
         return future
 
     def submit_array(
@@ -157,17 +168,30 @@ class RayLauncher:
         mem_per_node = mem_per_task * tasks_per_node
 
         if job_name not in self.placement_groups:
-            placement_group = ray.util.placement_group(
-                bundles=[
-                    {
-                        "CPU": cpus_per_node,
-                        "GPU": gpus_per_node,
-                        "memory": mem_per_node * 1024 * 1024,  # Convert MB to bytes
-                    }
-                ]
-                * nodes,
-                strategy="STRICT_SPREAD",
-            )
+            if not is_npu_available:
+                placement_group = ray.util.placement_group(
+                    bundles=[
+                        {
+                            "CPU": cpus_per_node,
+                            "GPU": gpus_per_node,
+                            "memory": mem_per_node * 1024 * 1024,  # Convert MB to bytes
+                        }
+                    ]
+                    * nodes,
+                    strategy="PACK",
+                )
+            else:
+                placement_group = ray.util.placement_group(
+                    bundles=[
+                        {
+                            "CPU": cpus_per_node,
+                            "NPU": gpus_per_node,
+                            "memory": mem_per_node * 1024 * 1024,  # Convert MB to bytes
+                        }
+                    ]
+                    * nodes,
+                    strategy="PACK",
+                )
             try:
                 ray.get(placement_group.ready(), timeout=30)
             except ray.exceptions.GetTimeoutError as e:
@@ -319,8 +343,11 @@ def ray_main(config, run_id: int = 0):
     config.launcher = to_structured_cfg(config.launcher, LauncherConfig)
     config.recover = to_structured_cfg(config.recover, RecoverConfig)
     config.cluster = to_structured_cfg(config.cluster, ClusterSpecConfig)
-    config.sglang = to_structured_cfg(config.sglang, SGLangConfig)
-    config.vllm = to_structured_cfg(config.vllm, vLLMConfig)
+    # FIXME: determine backend engine via npu_available
+    if not is_npu_available:
+        config.sglang = to_structured_cfg(config.sglang, SGLangConfig)
+    else:
+        config.vllm = to_structured_cfg(config.vllm, vLLMConfig)
     is_recover_run = check_if_recover(config.recover, run_id)
     validate_config_for_distributed_launcher(config)
 

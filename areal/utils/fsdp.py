@@ -7,7 +7,7 @@ from torch.distributed.device_mesh import init_device_mesh
 from transformers import PreTrainedModel
 
 from realhf.base import logging, pkg_version
-
+from areal.utils.device import is_npu_available
 logger = logging.getLogger("FSDPEngine")
 
 if pkg_version.is_version_greater_or_equal("torch", "2.6.0"):
@@ -52,13 +52,14 @@ def fsdp2_clip_grad_norm_(
 
 
 def create_fsdp_device_mesh(shard_size, world_size):
+    device = "cuda" if not is_npu_available else "npu"
     if shard_size < 0 or shard_size >= world_size:
         device_mesh = init_device_mesh(
-            "cuda", mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
+            device, mesh_shape=(world_size,), mesh_dim_names=("fsdp",)
         )
     else:
         device_mesh = init_device_mesh(
-            "cuda",
+            device,
             mesh_shape=(world_size // shard_size, shard_size),
             mesh_dim_names=("ddp", "fsdp"),
         )

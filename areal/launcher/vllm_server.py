@@ -15,6 +15,7 @@ from areal.api.cli_args import (
     parse_cli_args,
     to_structured_cfg,
 )
+from areal.utils.device import is_npu_available
 from areal.api.io_struct import AllocationMode
 from areal.utils.launcher import TRITON_CACHE_PATH
 from areal.utils.network import find_free_ports, gethostip
@@ -90,15 +91,26 @@ class vLLMServerWrapper:
             raise NotImplementedError("Cross-node vllm is not supported")
 
         n_servers_per_node = max(1, self.n_gpus_per_node // gpus_per_server)
-        if "CUDA_VISIBLE_DEVICES" in os.environ:
-            visible = os.getenv("CUDA_VISIBLE_DEVICES").split(",")
-            n_visible_devices = len(visible)
-            n_servers_per_proc = max(1, n_visible_devices // gpus_per_server)
-            server_idx_offset = int(visible[0]) // gpus_per_server
+        if not is_npu_available:
+            if "CUDA_VISIBLE_DEVICES" in os.environ:
+                visible = os.getenv("CUDA_VISIBLE_DEVICES").split(",")
+                n_visible_devices = len(visible)
+                n_servers_per_proc = max(1, n_visible_devices // gpus_per_server)
+                server_idx_offset = int(visible[0]) // gpus_per_server
+            else:
+                n_visible_devices = self.n_gpus_per_node
+                n_servers_per_proc = n_servers_per_node
+                server_idx_offset = 0
         else:
-            n_visible_devices = self.n_gpus_per_node
-            n_servers_per_proc = n_servers_per_node
-            server_idx_offset = 0
+            if "ASCEND_RT_VISIBLE_DEVICES" in os.environ:
+                visible = os.getenv("ASCEND_RT_VISIBLE_DEVICES").split(",")
+                n_visible_devices = len(visible)
+                n_servers_per_proc = max(1, n_visible_devices // gpus_per_server)
+                server_idx_offset = int(visible[0]) // gpus_per_server
+            else:
+                n_visible_devices = self.n_gpus_per_node
+                n_servers_per_proc = n_servers_per_node
+                server_idx_offset = 0
 
         # Separate ports used by each server in the same node
         # ports range (10000, 50000)

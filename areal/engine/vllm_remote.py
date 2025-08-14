@@ -169,7 +169,7 @@ class RemotevLLMEngine(InferenceEngine):
             meta_info = result["choices"][0]
             # Check if generation is complete
             finish_reason = meta_info["finish_reason"]
-            stop_reason = finish_reason["type"]
+            stop_reason = meta_info["stop_reason"]
             if (
                 stop_reason == "abort"
                 and finish_reason.get("message") == "Abort before prefill"
@@ -187,8 +187,8 @@ class RemotevLLMEngine(InferenceEngine):
             # FIXME: Update with actual server versions
             accumulated_versions.extend([-1] * len(output_tokens))
 
-            payload["input_ids"] += output_tokens
-            payload["max_new_tokens"] -= len(output_tokens)
+            payload["prompt"] += output_tokens
+            payload["max_tokens"] -= len(output_tokens)
 
         latency = time.perf_counter() - start_time
 
