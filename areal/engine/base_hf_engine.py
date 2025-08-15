@@ -92,8 +92,6 @@ class BaseHFEngine(TrainEngine):
                 dist.init_process_group(
                     backend="hccl",
                     timeout=constants.NCCL_DEFAULT_TIMEOUT,
-                    world_size=int(os.environ["WORLD_SIZE"]),
-                    rank=int(os.environ["LOCAL_RANK"]),
                 )
                 self.own_global_group = True
         else:
