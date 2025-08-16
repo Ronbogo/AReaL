@@ -169,7 +169,7 @@ class RemotevLLMEngine(InferenceEngine):
             meta_info = result["choices"][0]
             # Check if generation is complete
             finish_reason = meta_info["finish_reason"]
-            stop_reason = meta_info["stop_reason"]
+            stop_reason = finish_reason
             if (
                 stop_reason == "abort"
                 and finish_reason.get("message") == "Abort before prefill"
